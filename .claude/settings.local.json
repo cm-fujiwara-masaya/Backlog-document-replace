@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(winget upgrade *)",
-      "WebFetch(domain:developer.nulab.com)"
+      "WebFetch(domain:developer.nulab.com)",
+      "WebSearch"
     ]
   }
 }
