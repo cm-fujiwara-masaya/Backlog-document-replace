@@ -539,6 +539,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const item = document.createElement('div');
       item.className = 'result-item';
 
+      const topRow = document.createElement('div');
+      topRow.style.display = 'flex';
+      topRow.style.justifyContent = 'space-between';
+      topRow.style.alignItems = 'center';
+      topRow.style.width = '100%';
+
       const name = document.createElement('span');
       name.className = 'doc-name';
       name.title = r.name;
@@ -546,10 +552,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const badge = document.createElement('span');
       badge.className = 'badge';
-      if (r.error) {
+      const hasError = !!r.error || (isExecResult && r.success === false);
+      if (hasError) {
         badge.className += ' badge-err';
         badge.textContent = 'エラー';
-      } else if (r.count === 0) {
+      } else if (r.count === 0 || r.count === undefined) {
         badge.className += ' badge-zero';
         badge.textContent = isExecResult ? 'スキップ' : '一致なし';
       } else {
@@ -557,8 +564,28 @@ document.addEventListener("DOMContentLoaded", () => {
         badge.textContent = isExecResult ? `${r.count}箇所` : `${r.count}件`;
       }
 
-      item.appendChild(name);
-      item.appendChild(badge);
+      topRow.appendChild(name);
+      topRow.appendChild(badge);
+      item.appendChild(topRow);
+
+      // エラー詳細を2行目に表示（クリックでクリップボードにコピー）
+      if (hasError) {
+        const errLine = document.createElement('div');
+        errLine.style.fontSize = '10px';
+        errLine.style.color = '#c0392b';
+        errLine.style.marginTop = '3px';
+        errLine.style.wordBreak = 'break-all';
+        errLine.style.cursor = 'pointer';
+        errLine.textContent = r.error || 'unknown error';
+        errLine.title = 'クリックでエラー文をコピー';
+        errLine.addEventListener('click', () => {
+          navigator.clipboard?.writeText(r.error || '').catch(() => {});
+        });
+        item.style.flexDirection = 'column';
+        item.style.alignItems = 'stretch';
+        item.appendChild(errLine);
+      }
+
       bResultList.appendChild(item);
     }
     bResultList.style.display = results.length > 0 ? '' : 'none';

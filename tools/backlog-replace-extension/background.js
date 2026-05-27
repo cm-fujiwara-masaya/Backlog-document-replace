@@ -83,27 +83,42 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
     await setBulkState({ status: 'running', current: i, total: documents.length, currentDoc: doc.name, results });
 
     let tabId = null;
+    const ctx = `[bulkReplace ${i + 1}/${documents.length}] "${doc.name}" (${doc.id})`;
     try {
       const docUrl = `${base}/document/${projectKey}/e/${doc.id}`;
+      console.log(`${ctx} open tab: ${docUrl}`);
       const tab = await chrome.tabs.create({ url: docUrl, active: false });
       tabId = tab.id;
 
       await waitForTabLoad(tab.id);
-      await waitForContentScript(tab.id);
+      console.log(`${ctx} tab loaded (id=${tabId})`);
+
+      await waitForContentScript(tab.id, ctx);
+      console.log(`${ctx} content script ready`);
 
       const result = await chrome.tabs.sendMessage(tab.id, {
         action: 'autoReplace',
         searchText,
         replaceText,
         caseSensitive,
-      }).catch(e => ({ success: false, error: e.message }));
+      }).catch(e => {
+        console.error(`${ctx} sendMessage(autoReplace) failed:`, e);
+        return { success: false, error: `sendMessage failed: ${e.message}` };
+      });
+
+      if (!result.success) {
+        console.error(`${ctx} autoReplace returned error:`, result.error);
+      } else {
+        console.log(`${ctx} replaced ${result.count} occurrences`);
+      }
 
       results.push({ id: doc.id, name: doc.name, ...result });
     } catch (e) {
+      console.error(`${ctx} threw:`, e);
       results.push({ id: doc.id, name: doc.name, success: false, error: e.message });
     } finally {
       if (tabId != null) {
-        await chrome.tabs.remove(tabId).catch(() => {});
+        await chrome.tabs.remove(tabId).catch(err => console.warn(`${ctx} tab.remove failed:`, err));
         await sleep(400);
       }
     }
@@ -118,22 +133,33 @@ async function setBulkState(state) {
 }
 
 // content scriptが応答可能になるまで待つ。タイムアウトしたら programmatic injection でフォールバック
-async function waitForContentScript(tabId, maxAttempts = 30, intervalMs = 500) {
+async function waitForContentScript(tabId, ctx = '', maxAttempts = 30, intervalMs = 500) {
+  let lastErr = null;
+  let lastRes = null;
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const res = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+      lastRes = res;
       if (res && res.ready) return true;
-    } catch (_) { /* not ready yet */ }
+    } catch (e) {
+      lastErr = e;
+    }
     await sleep(intervalMs);
   }
-  // 最後の手段: content.js を直接注入してから再度ping
+  console.warn(`${ctx} ping timed out after ${maxAttempts * intervalMs}ms (lastErr=${lastErr?.message}, lastRes=${JSON.stringify(lastRes)}). Trying programmatic injection.`);
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
     await sleep(800);
     const res = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-    if (res && res.ready) return true;
-  } catch (_) { /* injection failed */ }
-  throw new Error('content_script_not_ready');
+    if (res && res.ready) {
+      console.log(`${ctx} content script injected via scripting API`);
+      return true;
+    }
+    console.error(`${ctx} ping after injection still not ready:`, res);
+  } catch (e) {
+    console.error(`${ctx} programmatic injection failed:`, e);
+  }
+  throw new Error(`content_script_not_ready (lastErr=${lastErr?.message ?? 'none'})`);
 }
 
 function waitForTabLoad(tabId) {
