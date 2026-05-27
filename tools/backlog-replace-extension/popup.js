@@ -268,12 +268,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // ポップアップを閉じた時にハイライトをクリア
+  // ポップアップを閉じた時にハイライトをクリア（content scriptが居なくてもエラーを握り潰す）
   (async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     try {
-      chrome.tabs.connect(tab.id, { name: "blg-fr-popup" });
-    } catch (_) {}
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+      const port = chrome.tabs.connect(tab.id, { name: "blg-fr-popup" });
+      port.onDisconnect.addListener(() => {
+        // lastError を読み出して "Unchecked runtime.lastError" を抑制
+        void chrome.runtime.lastError;
+      });
+    } catch (_) { /* ignore */ }
   })();
 
   // ===== タブ切替 =====
@@ -477,12 +482,12 @@ document.addEventListener("DOMContentLoaded", () => {
       searchText,
       replaceText,
       caseSensitive: bCaseSensitive.checked,
-    });
+    }).catch(() => { /* ignore */ });
   });
 
   // キャンセル
   bCancel.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'cancelBulkReplace' });
+    chrome.runtime.sendMessage({ action: 'cancelBulkReplace' }).catch(() => {});
     bShowStatus('キャンセル中…', 'warning');
   });
 
