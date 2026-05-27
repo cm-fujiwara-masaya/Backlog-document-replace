@@ -2,6 +2,7 @@
 
 let cancelRequested = false;
 
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'fetchDocumentTree') {
     fetchDocumentTree(message.spaceUrl, message.apiKey, message.projectKey)
