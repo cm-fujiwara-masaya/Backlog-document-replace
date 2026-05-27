@@ -82,12 +82,14 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
     const doc = documents[i];
     await setBulkState({ status: 'running', current: i, total: documents.length, currentDoc: doc.name, results });
 
+    let tabId = null;
     try {
-      const docUrl = `${base}/projects/${projectKey}/document/${doc.id}`;
+      const docUrl = `${base}/document/${projectKey}/e/${doc.id}`;
       const tab = await chrome.tabs.create({ url: docUrl, active: false });
+      tabId = tab.id;
 
       await waitForTabLoad(tab.id);
-      await sleep(1200);
+      await waitForContentScript(tab.id);
 
       const result = await chrome.tabs.sendMessage(tab.id, {
         action: 'autoReplace',
@@ -96,12 +98,14 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
         caseSensitive,
       }).catch(e => ({ success: false, error: e.message }));
 
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      await sleep(500);
-
       results.push({ id: doc.id, name: doc.name, ...result });
     } catch (e) {
       results.push({ id: doc.id, name: doc.name, success: false, error: e.message });
+    } finally {
+      if (tabId != null) {
+        await chrome.tabs.remove(tabId).catch(() => {});
+        await sleep(400);
+      }
     }
   }
 
@@ -111,6 +115,25 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
 async function setBulkState(state) {
   await chrome.storage.local.set({ bulkReplaceState: state });
   chrome.runtime.sendMessage({ action: 'bulkStateUpdate', state }).catch(() => {});
+}
+
+// content scriptが応答可能になるまで待つ。タイムアウトしたら programmatic injection でフォールバック
+async function waitForContentScript(tabId, maxAttempts = 30, intervalMs = 500) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+      if (res && res.ready) return true;
+    } catch (_) { /* not ready yet */ }
+    await sleep(intervalMs);
+  }
+  // 最後の手段: content.js を直接注入してから再度ping
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    await sleep(800);
+    const res = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+    if (res && res.ready) return true;
+  } catch (_) { /* injection failed */ }
+  throw new Error('content_script_not_ready');
 }
 
 function waitForTabLoad(tabId) {
