@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 340px;
+      padding: 0;
+      font-family: "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      color: #323232;
+      background: #f5f5f5;
+    }
+
+    /* --- Header bar --- */
+    h1 {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 16px;
+      margin: 0;
+      color: #fff;
+      background: #42ce9f;
+      letter-spacing: 0.02em;
+    }
+
+    /* --- Main content area --- */
+    .field {
+      margin: 0 16px;
+      padding-top: 12px;
+    }
+    .field + .field {
+      padding-top: 8px;
+    }
+    .field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #777;
+      margin-bottom: 4px;
+      letter-spacing: 0.03em;
+    }
+    .field input[type="text"] {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid #ccd0d4;
+      border-radius: 3px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #323232;
+      background: #fff;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .field input[type="text"]:focus {
+      border-color: #42ce9f;
+      box-shadow: 0 0 0 2px rgba(66, 206, 159, 0.18);
+    }
+    .field input[type="text"]::placeholder {
+      color: #aab0b6;
+    }
+
+    /* --- Options (checkbox) --- */
+    .options {
+      margin: 8px 16px 0;
+    }
+    .options label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+    }
+    .options input[type="checkbox"] {
+      accent-color: #42ce9f;
+      width: 14px;
+      height: 14px;
+    }
+
+    /* --- Buttons --- */
+    .buttons {
+      display: flex;
+      gap: 6px;
+      margin: 0 16px;
+    }
+    .options + .buttons {
+      margin-top: 12px;
+    }
+    .buttons + .buttons {
+      margin-top: 6px;
+    }
+    button {
+      flex: 1;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+      line-height: 1.4;
+    }
+    button:hover {
+      opacity: 0.88;
+    }
+    button:active {
+      opacity: 0.76;
+    }
+    button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .btn-nav {
+      background: #fff;
+      color: #555;
+      border-color: #ccd0d4;
+    }
+    .btn-nav:hover:not(:disabled) {
+      background: #f0f0f0;
+    }
+    .btn-replace {
+      background: #fff;
+      color: #e8850c;
+      border-color: #e8850c;
+    }
+    .btn-replace:hover:not(:disabled) {
+      background: #fef6ec;
+    }
+    .btn-replace-all {
+      background: #e8850c;
+      color: #fff;
+    }
+
+    /* --- Status bar --- */
+    #status {
+      margin: 10px 16px 14px;
+      padding: 7px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+      text-align: center;
+      display: none;
+      border-left: 3px solid transparent;
+    }
+    #status.info {
+      display: block;
+      background: #eaf4fb;
+      color: #2478b5;
+      border-left-color: #2478b5;
+    }
+    #status.success {
+      display: block;
+      background: #eaf7f0;
+      color: #2a8f5e;
+      border-left-color: #42ce9f;
+    }
+    #status.error {
+      display: block;
+      background: #fceeed;
+      color: #c0392b;
+      border-left-color: #c0392b;
+    }
+    #status.warning {
+      display: block;
+      background: #fef8ec;
+      color: #b8860b;
+      border-left-color: #e8850c;
+    }
+
+    /* Bottom padding */
+    #status:empty {
+      display: block;
+      margin: 0;
+      padding: 0;
+      border: none;
+      height: 14px;
+      background: none;
+    }
+
+    /* --- Tabs --- */
+    .tab-bar {
+      display: flex;
+      border-bottom: 2px solid #e0e0e0;
+      background: #fff;
+    }
+    .tab-bar button {
+      flex: 1;
+      padding: 8px 0;
+      border: none;
+      border-radius: 0;
+      background: none;
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-bar button:hover { color: #42ce9f; }
+    .tab-bar button.active { color: #42ce9f; border-bottom-color: #42ce9f; }
+
+    /* --- Bulk panel --- */
+    #panel-bulk { padding-bottom: 4px; }
+    #panel-bulk .section { padding: 10px 16px 0; }
+    #panel-bulk .field { padding-top: 8px; }
+    #panel-bulk .field:first-child { padding-top: 0; }
+    #panel-bulk .field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #777;
+      margin-bottom: 4px;
+    }
+    #panel-bulk .field input,
+    #panel-bulk .field select {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid #ccd0d4;
+      border-radius: 3px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #323232;
+      background: #fff;
+      outline: none;
+    }
+    #panel-bulk .field input:focus,
+    #panel-bulk .field select:focus {
+      border-color: #42ce9f;
+      box-shadow: 0 0 0 2px rgba(66,206,159,0.18);
+    }
+    .btn-load {
+      width: 100%;
+      margin-top: 10px;
+      padding: 8px;
+      background: #42ce9f;
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .btn-load:hover { opacity: 0.88; }
+    .btn-load:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-cancel {
+      width: 100%;
+      margin-top: 6px;
+      padding: 6px;
+      background: #fff;
+      color: #c0392b;
+      border: 1px solid #c0392b;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .doc-count {
+      margin-top: 5px;
+      font-size: 11px;
+      color: #777;
+    }
+    .divider {
+      height: 1px;
+      background: #e8e8e8;
+      margin: 10px 16px 0;
+    }
+    /* Progress */
+    .progress-wrap {
+      margin: 10px 16px 0;
+    }
+    .progress-bar-bg {
+      background: #e0e0e0;
+      border-radius: 3px;
+      height: 6px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: #42ce9f;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .progress-label {
+      font-size: 11px;
+      color: #777;
+      margin-top: 4px;
+    }
+    /* Results list */
+    .result-list {
+      margin: 8px 16px 0;
+      max-height: 140px;
+      overflow-y: auto;
+      border: 1px solid #e0e0e0;
+      border-radius: 3px;
+    }
+    .result-item {
+      padding: 5px 8px;
+      font-size: 11px;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .result-item:last-child { border-bottom: none; }
+    .result-item .doc-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .result-item .badge {
+      flex-shrink: 0;
+      margin-left: 6px;
+      padding: 1px 5px;
+      border-radius: 9px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .badge-ok { background: #eaf7f0; color: #2a8f5e; }
+    .badge-zero { background: #f5f5f5; color: #999; }
+    .badge-err { background: #fceeed; color: #c0392b; }
+    #b-status {
+      margin: 10px 16px 14px;
+      padding: 7px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+      text-align: center;
+      display: none;
+      border-left: 3px solid transparent;
+    }
+    #b-status.info    { display:block; background:#eaf4fb; color:#2478b5; border-left-color:#2478b5; }
+    #b-status.success { display:block; background:#eaf7f0; color:#2a8f5e; border-left-color:#42ce9f; }
+    #b-status.error   { display:block; background:#fceeed; color:#c0392b; border-left-color:#c0392b; }
+    #b-status.warning { display:block; background:#fef8ec; color:#b8860b; border-left-color:#e8850c; }
+  </style>
+</head>
+<body>
+  <h1>Find & Replace</h1>
+
+  <div class="tab-bar">
+    <button class="active" data-tab="single">このページ</button>
+    <button data-tab="bulk">一括置換</button>
+  </div>
+
+  <!-- ===== 単一ページパネル ===== -->
+  <div id="panel-single">
+
+  <div class="field">
+    <label for="searchText">検索</label>
+    <input type="text" id="searchText" placeholder="検索する文字列">
+  </div>
+
+  <div class="field">
+    <label for="replaceText">置換</label>
+    <input type="text" id="replaceText" placeholder="置換後の文字列">
+  </div>
+
+  <div class="options">
+    <label>
+      <input type="checkbox" id="caseSensitive">
+      大文字・小文字を区別
+    </label>
+  </div>
+
+  <div class="buttons">
+    <button class="btn-nav" id="btnPrev" disabled>&lt; 前</button>
+    <button class="btn-nav" id="btnNext" disabled>次 &gt;</button>
+  </div>
+
+  <div class="buttons">
+    <button class="btn-replace" id="btnReplace">置換</button>
+    <button class="btn-replace-all" id="btnReplaceAll">全置換</button>
+  </div>
+
+  <div id="status"></div>
+
+  </div><!-- /#panel-single -->
+
+  <!-- ===== 一括置換パネル ===== -->
+  <div id="panel-bulk" style="display:none">
+
+    <div class="section">
+      <div class="field">
+        <label>スペースURL</label>
+        <input type="text" id="b-spaceUrl" placeholder="xxx.backlog.com">
+      </div>
+      <div class="field">
+        <label>APIキー</label>
+        <input type="password" id="b-apiKey" placeholder="••••••••••">
+      </div>
+      <div class="field">
+        <label>プロジェクトキー</label>
+        <input type="text" id="b-projectKey" placeholder="PROJECT_KEY">
+      </div>
+      <button id="b-loadDocs" class="btn-load">ドキュメントを読み込む</button>
+    </div>
+
+    <div id="b-folderSection" style="display:none">
+      <div class="divider"></div>
+      <div class="section">
+        <div class="field">
+          <label>対象フォルダ</label>
+          <select id="b-folderSelect">
+            <option value="">すべてのドキュメント</option>
+          </select>
+        </div>
+        <div id="b-docCount" class="doc-count"></div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="section">
+        <div class="field">
+          <label>検索</label>
+          <input type="text" id="b-searchText" placeholder="検索する文字列">
+        </div>
+        <div class="field">
+          <label>置換</label>
+          <input type="text" id="b-replaceText" placeholder="置換後の文字列">
+        </div>
+        <div class="options" style="margin-top:8px">
+          <label>
+            <input type="checkbox" id="b-caseSensitive">
+            大文字・小文字を区別
+          </label>
+        </div>
+        <div class="buttons" style="margin-top:10px">
+          <button id="b-dryRun" class="btn-nav">ドライラン</button>
+          <button id="b-execute" class="btn-replace-all" disabled>一括置換を実行</button>
+        </div>
+        <button id="b-cancel" class="btn-cancel" style="display:none">キャンセル</button>
+      </div>
+    </div>
+
+    <div id="b-progressSection" style="display:none">
+      <div class="divider"></div>
+      <div class="progress-wrap">
+        <div class="progress-bar-bg">
+          <div id="b-progressFill" class="progress-bar-fill" style="width:0%"></div>
+        </div>
+        <div id="b-progressLabel" class="progress-label"></div>
+      </div>
+    </div>
+
+    <div id="b-resultList" class="result-list" style="display:none"></div>
+
+    <div id="b-status"></div>
+
+  </div><!-- /#panel-bulk -->
+
+  <script src="popup.js"></script>
+</body>
+</html>
