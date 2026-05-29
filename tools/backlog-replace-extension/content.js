@@ -96,10 +96,44 @@
       sendResponse({ success: true });
     } else if (request.action === "ping") {
       const editor = getEditorElement();
-      sendResponse({ ready: !!editor, editable: isEditorEditable() });
+      const editBtn = findButtonByText('編集');
+      // デバッグ用: DOM上のボタンっぽい要素のラベルを最大20件収集
+      const buttonLabels = [];
+      const labelElems = document.querySelectorAll('button, [role="button"], a[href]');
+      for (let i = 0; i < labelElems.length && buttonLabels.length < 20; i++) {
+        const el = labelElems[i];
+        const label = el.getAttribute('aria-label')?.trim()
+          || el.querySelector('._assistive-text')?.textContent?.trim()
+          || el.getAttribute('title')?.trim()
+          || (el.textContent?.trim()?.slice(0, 20));
+        if (label) buttonLabels.push(label);
+      }
+      sendResponse({
+        // エディタが居る、または編集ボタンが居れば autoReplace に進める
+        ready: !!editor || !!editBtn,
+        editable: isEditorEditable(),
+        editorPresent: !!editor,
+        url: location.href,
+        title: document.title,
+        readyState: document.readyState,
+        hasEditButton: !!editBtn,
+        proseMirrorCount: document.querySelectorAll('.ProseMirror').length,
+        tiptapCount: document.querySelectorAll('.tiptap').length,
+        contenteditableCount: document.querySelectorAll('[contenteditable="true"]').length,
+        bodyTextPreview: document.body?.innerText?.trim()?.slice(0, 200),
+        buttonLabels,
+      });
     } else if (request.action === "autoReplace") {
       autoReplace(request.searchText, request.replaceText, request.caseSensitive)
         .then(sendResponse);
+      return true;
+    } else if (request.action === "navigateAndAutoReplace") {
+      navigateAndAutoReplace(
+        request.documentId,
+        request.searchText,
+        request.replaceText,
+        request.caseSensitive
+      ).then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
       return true;
     }
     return true; // 非同期レスポンスを許可
@@ -153,14 +187,27 @@
   }
 
   /**
-   * _assistive-text のテキストでボタンを検索
+   * テキスト/aria-label/title でボタン要素を検索（複数パターン対応）
    */
   function findButtonByText(text) {
-    for (const btn of document.querySelectorAll('button')) {
-      const span = btn.querySelector('._assistive-text');
-      if (span && span.textContent.trim() === text) return btn;
+    const targets = document.querySelectorAll('button, [role="button"], a');
+    for (const el of targets) {
+      // _assistive-text パターン
+      const span = el.querySelector?.('._assistive-text');
+      if (span && span.textContent.trim() === text) return el;
+      // aria-label パターン
+      if (el.getAttribute?.('aria-label')?.trim() === text) return el;
+      // title 属性パターン
+      if (el.getAttribute?.('title')?.trim() === text) return el;
+      // 短い textContent（アイコンボタンが含まれる場合があるので 20 文字までに制限）
+      const txt = el.textContent?.trim() ?? '';
+      if (txt && txt.length <= 20 && txt === text) return el;
     }
     return null;
+  }
+
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
   }
 
   /**
@@ -183,10 +230,12 @@
   }
 
   /**
-   * Tiptapエディタ要素を取得
+   * Tiptapエディタ要素を取得（複数のセレクタにフォールバック）
    */
   function getEditorElement() {
-    return document.querySelector(".tiptap.ProseMirror");
+    return document.querySelector(".tiptap.ProseMirror") ||
+           document.querySelector(".ProseMirror") ||
+           document.querySelector("[contenteditable='true']");
   }
 
   /**
@@ -282,56 +331,236 @@
   }
 
   /**
-   * 一括置換モード用: 編集モード突入 → 全置換 → 保存
+   * サイドバーリンクから対象ドキュメントを見つける
+   * href の末尾IDまたは data-node-id で判定
    */
-  async function autoReplace(searchText, replaceText, caseSensitive) {
-    try {
-      await waitForCondition(() => !!getEditorElement(), 8000);
-    } catch {
-      return { success: false, error: 'editor_not_found' };
+  function findSidebarLink(documentId) {
+    // href ベース: <a class="tree-item-link" href="/document/{key}/{id}">
+    let link = document.querySelector(`a.tree-item-link[href$="/${documentId}"]`);
+    if (link) return link;
+    // data-node-id ベース: <button data-node-id="{id}"> → 親 <a>
+    const btn = document.querySelector(`button[data-node-id="${documentId}"]`);
+    if (btn) {
+      const parent = btn.closest('a.tree-item-link');
+      if (parent) return parent;
+    }
+    return null;
+  }
+
+  /**
+   * サイドバーの折りたたまれているフォルダをすべて展開する
+   * 折りたたまれていると子ドキュメントの <a> がDOMに無い場合があるため
+   */
+  async function expandAllSidebarFolders() {
+    for (let i = 0; i < 10; i++) {
+      const closed = document.querySelectorAll('button.tree-icon-button[data-is-open="false"]');
+      if (closed.length === 0) return;
+      for (const btn of closed) {
+        try { btn.click(); } catch (_) {}
+      }
+      await sleep(300);
+    }
+  }
+
+  /**
+   * 一括置換モード用（SPA navigation 方式）:
+   * サイドバーから指定IDのドキュメントリンクを探してクリック → 編集→置換→保存
+   */
+  async function navigateAndAutoReplace(documentId, searchText, replaceText, caseSensitive) {
+    // 既にそのドキュメントを表示中なら遷移をスキップ
+    const alreadyOnDoc = location.pathname.endsWith(`/${documentId}`);
+
+    if (!alreadyOnDoc) {
+      // ユーザーが編集中だと遷移確認ダイアログが出るので回避
+      if (isEditorEditable()) {
+        return { success: false, error: 'user_currently_editing' };
+      }
+
+      // 1回だけサイドバーを展開する（高コストなので毎回はしない）
+      let link = findSidebarLink(documentId);
+      if (!link) {
+        await expandAllSidebarFolders();
+        link = findSidebarLink(documentId);
+      }
+      if (!link) {
+        return { success: false, error: 'sidebar_link_not_found' };
+      }
+
+      link.click();
+
+      // SPA遷移完了を待つ: URLが切り替わって、エディタor編集ボタンが出るまで
+      try {
+        await waitForCondition(() => {
+          if (!location.pathname.endsWith(`/${documentId}`)) return false;
+          return !!getEditorElement() || !!findButtonByText('編集');
+        }, 15000);
+      } catch {
+        return { success: false, error: 'navigation_timeout' };
+      }
+
+      // SPAの安定化（タイトル/DOM更新待ち）
+      await sleep(500);
     }
 
+    return await autoReplace(searchText, replaceText, caseSensitive);
+  }
+
+  /**
+   * 一括置換モード用: 編集モード突入 → 全置換 → 保存
+   * 表示モードではTiptap DOMが描画されないので、先に編集ボタンをクリックする
+   */
+  async function autoReplace(searchText, replaceText, caseSensitive) {
+    // 既に編集モードならスキップ。そうでなければ編集ボタンを探してクリック
     if (!isEditorEditable()) {
-      const editBtn = findButtonByText('編集');
-      if (!editBtn) return { success: false, error: 'edit_button_not_found' };
+      let editBtn = null;
+      try {
+        await waitForCondition(() => {
+          editBtn = findButtonByText('編集');
+          return !!editBtn;
+        }, 10000);
+      } catch {
+        return { success: false, error: 'edit_button_not_found' };
+      }
       editBtn.click();
       try {
-        await waitForCondition(() => isEditorEditable(), 5000);
+        await waitForCondition(() => isEditorEditable(), 10000);
       } catch {
-        return { success: false, error: 'editor_not_editable' };
+        return { success: false, error: 'editor_not_editable_after_click' };
+      }
+    }
+
+    // 念のためエディタDOMがある事も確認
+    if (!getEditorElement()) {
+      try {
+        await waitForCondition(() => !!getEditorElement(), 5000);
+      } catch {
+        return { success: false, error: 'editor_element_not_found' };
       }
     }
 
     const result = replaceAllText(searchText, replaceText, caseSensitive);
+    if (!result.success) return result;
 
-    const saveBtn = findButtonByText('編集を終了');
-    if (saveBtn) saveBtn.click();
-    await waitForCondition(() => !isEditorEditable(), 8000).catch(() => {});
+    if (result.count > 0) {
+      // 置換あり: 「編集を終了」をクリックして保存。失敗を error として返す
+      const saveBtn = findButtonByText('編集を終了');
+      if (!saveBtn) return { success: false, count: result.count, error: 'save_button_not_found' };
+      saveBtn.click();
+      try {
+        await waitForCondition(() => !isEditorEditable(), 10000);
+      } catch {
+        return { success: false, count: result.count, error: 'save_did_not_complete' };
+      }
+    } else {
+      // 置換0件: 変更がないので「キャンセル」優先で編集モードを抜ける
+      const cancelBtn = findButtonByText('キャンセル') || findButtonByText('破棄');
+      if (cancelBtn) {
+        cancelBtn.click();
+      } else {
+        // フォールバック: 「編集を終了」（Backlog側で「変更なし」と判断されるはず）
+        const saveBtn = findButtonByText('編集を終了');
+        if (saveBtn) saveBtn.click();
+      }
+      // タブを閉じる前提なので検証は緩く
+      await waitForCondition(() => !isEditorEditable(), 3000).catch(() => {});
+    }
 
     return result;
   }
 
   /**
+   * ブロック内の連続するテキストノードをまたいで検索する
+   * 例: <p>Foo<strong>Bar</strong>Baz</p> で「FooBarBaz」を検索可能にする
+   */
+  function findTextAcrossNodes(searchText, caseSensitive) {
+    const editor = getEditorElement();
+    if (!editor || !searchText) return [];
+
+    // ブロック要素ごとにテキストノードをグループ化
+    const blockSelector = 'p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, dt, dd';
+    const allTextNodes = getTextNodes(editor);
+    const groupMap = new Map();
+    const groupOrder = [];
+    for (const node of allTextNodes) {
+      const block = node.parentElement?.closest(blockSelector) || editor;
+      if (!groupMap.has(block)) {
+        groupMap.set(block, []);
+        groupOrder.push(block);
+      }
+      groupMap.get(block).push(node);
+    }
+
+    const needle = caseSensitive ? searchText : searchText.toLowerCase();
+    const matches = [];
+
+    for (const block of groupOrder) {
+      const nodes = groupMap.get(block);
+      let combined = '';
+      const boundaries = [];
+      for (const node of nodes) {
+        const start = combined.length;
+        combined += node.textContent;
+        boundaries.push({ node, start, end: combined.length });
+      }
+      const haystack = caseSensitive ? combined : combined.toLowerCase();
+      let pos = 0;
+      while ((pos = haystack.indexOf(needle, pos)) !== -1) {
+        const endPos = pos + needle.length;
+        const startB = boundaries.find(b => b.start <= pos && pos < b.end);
+        const endB = boundaries.find(b => b.start < endPos && endPos <= b.end);
+        if (startB && endB) {
+          matches.push({
+            startNode: startB.node,
+            startOffset: pos - startB.start,
+            endNode: endB.node,
+            endOffset: endPos - endB.start,
+          });
+        }
+        pos = endPos;
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Range を選択して execCommand("insertText") で置換
+   */
+  function selectAndReplaceRange(match, replaceText) {
+    const range = document.createRange();
+    range.setStart(match.startNode, match.startOffset);
+    range.setEnd(match.endNode, match.endOffset);
+
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    document.execCommand("insertText", false, replaceText);
+  }
+
+  /**
    * 全てのマッチを置換（後ろから順に処理してインデックスのずれを防ぐ）
+   * ノードまたぎの検索に対応
    */
   function replaceAllText(searchText, replaceText, caseSensitive) {
     const editor = getEditorElement();
-    if (!editor || !searchText) return { success: false, count: 0 };
+    if (!editor || !searchText) return { success: false, count: 0, error: 'editor_not_found' };
     if (!isEditorEditable())
       return { success: false, count: 0, error: "not_editable" };
 
-    let totalReplaced = 0;
-
-    // 各テキストノードに対して後ろから置換（同一ノード内のインデックスずれ対策）
-    const matches = findText(searchText, caseSensitive);
-    if (matches.length === 0) return { success: false, count: 0 };
+    const matches = findTextAcrossNodes(searchText, caseSensitive);
+    // マッチ0件は「成功した上でスキップ」扱い（エラーではない）
+    if (matches.length === 0) return { success: true, count: 0 };
 
     // 後ろのマッチから処理する（DOMの位置的に後ろから）
     const reversedMatches = [...matches].reverse();
-
+    let totalReplaced = 0;
     for (const match of reversedMatches) {
-      selectAndReplace(match.node, match.index, match.length, replaceText);
-      totalReplaced++;
+      try {
+        selectAndReplaceRange(match, replaceText);
+        totalReplaced++;
+      } catch (e) {
+        /* 個別失敗はスキップ */
+      }
     }
 
     return { success: true, count: totalReplaced };

@@ -364,6 +364,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (!res.success) throw new Error(res.error);
 
+      // デバッグ: APIレスポンス構造を確認する（shortId等の追加フィールドの有無を見るため）
+      console.log('[fetchDocumentTree] raw response:', res.data);
+      const allDocsFlat = collectDocuments(normalizeTree(res.data));
+      console.log('[fetchDocumentTree] sample document node (first):', allDocsFlat[0]);
+      console.log('[fetchDocumentTree] all field keys of first node:', allDocsFlat[0] ? Object.keys(allDocsFlat[0]) : 'no nodes');
+
       treeData = normalizeTree(res.data);
       buildFolderSelect(treeData);
       bFolderSection.style.display = '';
@@ -463,7 +469,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (docs.length === 0) { bShowStatus('対象ドキュメントがありません', 'warning'); return; }
 
-    if (!confirm(`${docs.length} 件のドキュメントを一括置換します。よろしいですか？`)) return;
+    // 既存のBacklogタブで実行する必要があるため確認
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab || !/backlog\.(com|jp)/.test(activeTab.url || '')) {
+      bShowStatus('Backlogのドキュメント画面を表示中のタブをアクティブにしてから実行してください', 'warning');
+      return;
+    }
+
+    if (!confirm(`${docs.length} 件のドキュメントを「${activeTab.title || 'Backlog'}」タブ上で一括置換します。\n（このタブのドキュメントが順次切り替わります）\nよろしいですか？`)) return;
 
     bDryRun.disabled  = true;
     bExecute.disabled = true;
@@ -476,8 +489,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     chrome.runtime.sendMessage({
       action:        'startBulkReplace',
-      spaceUrl:      bSpaceUrl.value.trim(),
-      projectKey:    bProjectKey.value.trim(),
+      tabId:         activeTab.id,
       documents:     docs,
       searchText,
       replaceText,
