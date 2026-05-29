@@ -67,11 +67,36 @@ async function runDryRun({ spaceUrl, apiKey, documents, searchText, caseSensitiv
   return results;
 }
 
-async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, replaceText, caseSensitive }) {
-  const base = normalizeUrl(spaceUrl);
+async function startBulkReplace({ tabId, documents, searchText, replaceText, caseSensitive }) {
   const results = [];
 
   await setBulkState({ status: 'running', current: 0, total: documents.length, currentDoc: '', results });
+
+  // 対象タブが Backlog かつ有効か事前チェック
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !/backlog\.(com|jp)/.test(tab.url || '')) {
+      const msg = 'target_tab_not_backlog';
+      console.error(`[bulkReplace] ${msg}: url=${tab?.url}`);
+      await setBulkState({ status: 'completed', current: 0, total: documents.length, currentDoc: '', results: [{ id: '-', name: '-', success: false, error: msg }] });
+      return;
+    }
+  } catch (e) {
+    await setBulkState({ status: 'completed', current: 0, total: documents.length, currentDoc: '', results: [{ id: '-', name: '-', success: false, error: `target_tab_not_found: ${e.message}` }] });
+    return;
+  }
+
+  // content script が常駐していなければ inject
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+  } catch (_) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      await sleep(500);
+    } catch (e) {
+      console.error('[bulkReplace] content script injection failed:', e);
+    }
+  }
 
   for (let i = 0; i < documents.length; i++) {
     if (cancelRequested) {
@@ -80,34 +105,24 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
     }
 
     const doc = documents[i];
+    const ctx = `[bulkReplace ${i + 1}/${documents.length}] "${doc.name}" (${doc.id})`;
     await setBulkState({ status: 'running', current: i, total: documents.length, currentDoc: doc.name, results });
 
-    let tabId = null;
-    const ctx = `[bulkReplace ${i + 1}/${documents.length}] "${doc.name}" (${doc.id})`;
     try {
-      const docUrl = `${base}/document/${projectKey}/e/${doc.id}`;
-      console.log(`${ctx} open tab: ${docUrl}`);
-      const tab = await chrome.tabs.create({ url: docUrl, active: false });
-      tabId = tab.id;
-
-      await waitForTabLoad(tab.id);
-      console.log(`${ctx} tab loaded (id=${tabId})`);
-
-      await waitForContentScript(tab.id, ctx);
-      console.log(`${ctx} content script ready`);
-
-      const result = await chrome.tabs.sendMessage(tab.id, {
-        action: 'autoReplace',
+      console.log(`${ctx} navigateAndAutoReplace`);
+      const result = await chrome.tabs.sendMessage(tabId, {
+        action: 'navigateAndAutoReplace',
+        documentId: doc.id,
         searchText,
         replaceText,
         caseSensitive,
       }).catch(e => {
-        console.error(`${ctx} sendMessage(autoReplace) failed:`, e);
+        console.error(`${ctx} sendMessage failed:`, e);
         return { success: false, error: `sendMessage failed: ${e.message}` };
       });
 
       if (!result.success) {
-        console.error(`${ctx} autoReplace returned error:`, result.error);
+        console.error(`${ctx} returned error:`, result.error);
       } else {
         console.log(`${ctx} replaced ${result.count} occurrences`);
       }
@@ -116,14 +131,16 @@ async function startBulkReplace({ spaceUrl, projectKey, documents, searchText, r
     } catch (e) {
       console.error(`${ctx} threw:`, e);
       results.push({ id: doc.id, name: doc.name, success: false, error: e.message });
-    } finally {
-      if (tabId != null) {
-        await chrome.tabs.remove(tabId).catch(err => console.warn(`${ctx} tab.remove failed:`, err));
-        await sleep(400);
-      }
     }
+
+    // 次のドキュメント遷移までの安定化（SPA レンダリングのため）
+    await sleep(600);
   }
 
+  if (cancelRequested) {
+    await setBulkState({ status: 'cancelled', current: documents.length, total: documents.length, currentDoc: '', results });
+    return;
+  }
   await setBulkState({ status: 'completed', current: documents.length, total: documents.length, currentDoc: '', results });
 }
 
@@ -133,20 +150,32 @@ async function setBulkState(state) {
 }
 
 // content scriptが応答可能になるまで待つ。タイムアウトしたら programmatic injection でフォールバック
-async function waitForContentScript(tabId, ctx = '', maxAttempts = 30, intervalMs = 500) {
+async function waitForContentScript(tabId, ctx = '', maxAttempts = 60, intervalMs = 500) {
   let lastErr = null;
   let lastRes = null;
+  let firstConnectAt = -1;
   for (let i = 0; i < maxAttempts; i++) {
+    if (cancelRequested) throw new Error('cancelled');
     try {
       const res = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
       lastRes = res;
+      if (firstConnectAt < 0) firstConnectAt = i;
       if (res && res.ready) return true;
     } catch (e) {
       lastErr = e;
     }
     await sleep(intervalMs);
   }
-  console.warn(`${ctx} ping timed out after ${maxAttempts * intervalMs}ms (lastErr=${lastErr?.message}, lastRes=${JSON.stringify(lastRes)}). Trying programmatic injection.`);
+  if (cancelRequested) throw new Error('cancelled');
+  const elapsedMs = maxAttempts * intervalMs;
+  // 接続はできていたがエディタが現れなかった = ページは開いたがTiptapエディタなし
+  if (firstConnectAt >= 0 && lastRes) {
+    console.error(`${ctx} editor never appeared in ${elapsedMs}ms. last ping response:`, lastRes);
+    const labels = (lastRes.buttonLabels || []).slice(0, 10).join(' | ');
+    throw new Error(`editor_not_found url=${lastRes.url} title="${lastRes.title}" PM=${lastRes.proseMirrorCount} CE=${lastRes.contenteditableCount} editBtn=${lastRes.hasEditButton} buttons=[${labels}] bodyHead="${(lastRes.bodyTextPreview || '').slice(0, 80)}"`);
+  }
+  // 接続自体ができなかった → content scriptが未注入の可能性 → 直接注入を試す
+  console.warn(`${ctx} ping never connected (lastErr=${lastErr?.message}). Trying programmatic injection.`);
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
     await sleep(800);
@@ -156,22 +185,32 @@ async function waitForContentScript(tabId, ctx = '', maxAttempts = 30, intervalM
       return true;
     }
     console.error(`${ctx} ping after injection still not ready:`, res);
+    throw new Error(`editor_not_found_after_injection (url=${res?.url}, title=${res?.title}, proseMirrorCount=${res?.proseMirrorCount})`);
   } catch (e) {
+    if (e.message?.startsWith('editor_not_found')) throw e;
     console.error(`${ctx} programmatic injection failed:`, e);
+    throw new Error(`injection_failed: ${e.message}`);
   }
-  throw new Error(`content_script_not_ready (lastErr=${lastErr?.message ?? 'none'})`);
 }
 
-function waitForTabLoad(tabId) {
+function waitForTabLoad(tabId, timeoutMs = 20000) {
   return new Promise(resolve => {
+    let timeoutId;
+    const cleanup = () => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      clearTimeout(timeoutId);
+    };
     const onUpdated = (id, info) => {
       if (id === tabId && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(onUpdated);
+        cleanup();
         resolve();
       }
     };
     chrome.tabs.onUpdated.addListener(onUpdated);
-    setTimeout(resolve, 20000);
+    timeoutId = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, timeoutMs);
   });
 }
 
