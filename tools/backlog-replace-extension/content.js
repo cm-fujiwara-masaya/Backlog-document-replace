@@ -388,11 +388,15 @@
 
       link.click();
 
-      // SPA遷移完了を待つ: URLが切り替わって、エディタor編集ボタンが出るまで
+      // SPA遷移完了を待つ: URLが切り替わって、コンテンツ付きエディタor編集ボタンが出るまで
       try {
         await waitForCondition(() => {
           if (!location.pathname.endsWith(`/${documentId}`)) return false;
-          return !!getEditorElement() || !!findButtonByText('編集');
+          // 編集ボタンがあれば表示モードでコンテンツ描画済みとみなす
+          if (findButtonByText('編集')) return true;
+          // エディタが既にある場合は、テキストが入っている事を確認
+          const editor = getEditorElement();
+          return !!editor && (editor.textContent || '').trim().length > 0;
         }, 15000);
       } catch {
         return { success: false, error: 'navigation_timeout' };
@@ -437,6 +441,19 @@
         return { success: false, error: 'editor_element_not_found' };
       }
     }
+
+    // 編集モードに切り替わった直後はProseMirrorのコンテンツ反映が遅延する事があるため、
+    // テキストが描画されるまで待機（コンテンツが入ったら安定化待ちも入れる）
+    try {
+      await waitForCondition(() => {
+        const editor = getEditorElement();
+        if (!editor) return false;
+        return (editor.textContent || '').trim().length > 0;
+      }, 10000);
+    } catch {
+      return { success: false, error: 'editor_content_not_loaded' };
+    }
+    await sleep(400);
 
     const result = replaceAllText(searchText, replaceText, caseSensitive);
     if (!result.success) return result;
