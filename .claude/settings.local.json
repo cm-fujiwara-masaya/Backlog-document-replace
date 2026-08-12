@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(winget upgrade *)",
-      "WebFetch(domain:developer.nulab.com)"
-    ]
-  }
-}
