@@ -1,0 +1,4 @@
+# Claude Code
+# settings.json（プロジェクト共有設定）はコミットする。
+# *.local.json は個人ローカル設定かつ自動更新されるため除外する。
+.claude/settings.local.json
