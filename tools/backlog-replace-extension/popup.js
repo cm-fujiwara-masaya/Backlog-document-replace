@@ -268,12 +268,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // ポップアップを閉じた時にハイライトをクリア
+  // ポップアップを閉じた時にハイライトをクリア（content scriptが居なくてもエラーを握り潰す）
   (async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     try {
-      chrome.tabs.connect(tab.id, { name: "blg-fr-popup" });
-    } catch (_) {}
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+      const port = chrome.tabs.connect(tab.id, { name: "blg-fr-popup" });
+      port.onDisconnect.addListener(() => {
+        // lastError を読み出して "Unchecked runtime.lastError" を抑制
+        void chrome.runtime.lastError;
+      });
+    } catch (_) { /* ignore */ }
   })();
 
   // ===== タブ切替 =====
@@ -358,6 +363,12 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       if (!res.success) throw new Error(res.error);
+
+      // デバッグ: APIレスポンス構造を確認する（shortId等の追加フィールドの有無を見るため）
+      console.log('[fetchDocumentTree] raw response:', res.data);
+      const allDocsFlat = collectDocuments(normalizeTree(res.data));
+      console.log('[fetchDocumentTree] sample document node (first):', allDocsFlat[0]);
+      console.log('[fetchDocumentTree] all field keys of first node:', allDocsFlat[0] ? Object.keys(allDocsFlat[0]) : 'no nodes');
 
       treeData = normalizeTree(res.data);
       buildFolderSelect(treeData);
@@ -458,7 +469,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (docs.length === 0) { bShowStatus('対象ドキュメントがありません', 'warning'); return; }
 
-    if (!confirm(`${docs.length} 件のドキュメントを一括置換します。よろしいですか？`)) return;
+    // 既存のBacklogタブで実行する必要があるため確認
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab || !/backlog\.(com|jp)/.test(activeTab.url || '')) {
+      bShowStatus('Backlogのドキュメント画面を表示中のタブをアクティブにしてから実行してください', 'warning');
+      return;
+    }
+
+    if (!confirm(`${docs.length} 件のドキュメントを「${activeTab.title || 'Backlog'}」タブ上で一括置換します。\n（このタブのドキュメントが順次切り替わります）\nよろしいですか？`)) return;
 
     bDryRun.disabled  = true;
     bExecute.disabled = true;
@@ -471,18 +489,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     chrome.runtime.sendMessage({
       action:        'startBulkReplace',
-      spaceUrl:      bSpaceUrl.value.trim(),
-      projectKey:    bProjectKey.value.trim(),
+      tabId:         activeTab.id,
       documents:     docs,
       searchText,
       replaceText,
       caseSensitive: bCaseSensitive.checked,
-    });
+    }).catch(() => { /* ignore */ });
   });
 
   // キャンセル
   bCancel.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'cancelBulkReplace' });
+    chrome.runtime.sendMessage({ action: 'cancelBulkReplace' }).catch(() => {});
     bShowStatus('キャンセル中…', 'warning');
   });
 
@@ -534,6 +551,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const item = document.createElement('div');
       item.className = 'result-item';
 
+      const topRow = document.createElement('div');
+      topRow.style.display = 'flex';
+      topRow.style.justifyContent = 'space-between';
+      topRow.style.alignItems = 'center';
+      topRow.style.width = '100%';
+
       const name = document.createElement('span');
       name.className = 'doc-name';
       name.title = r.name;
@@ -541,10 +564,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const badge = document.createElement('span');
       badge.className = 'badge';
-      if (r.error) {
+      const hasError = !!r.error || (isExecResult && r.success === false);
+      if (hasError) {
         badge.className += ' badge-err';
         badge.textContent = 'エラー';
-      } else if (r.count === 0) {
+      } else if (r.count === 0 || r.count === undefined) {
         badge.className += ' badge-zero';
         badge.textContent = isExecResult ? 'スキップ' : '一致なし';
       } else {
@@ -552,8 +576,28 @@ document.addEventListener("DOMContentLoaded", () => {
         badge.textContent = isExecResult ? `${r.count}箇所` : `${r.count}件`;
       }
 
-      item.appendChild(name);
-      item.appendChild(badge);
+      topRow.appendChild(name);
+      topRow.appendChild(badge);
+      item.appendChild(topRow);
+
+      // エラー詳細を2行目に表示（クリックでクリップボードにコピー）
+      if (hasError) {
+        const errLine = document.createElement('div');
+        errLine.style.fontSize = '10px';
+        errLine.style.color = '#c0392b';
+        errLine.style.marginTop = '3px';
+        errLine.style.wordBreak = 'break-all';
+        errLine.style.cursor = 'pointer';
+        errLine.textContent = r.error || 'unknown error';
+        errLine.title = 'クリックでエラー文をコピー';
+        errLine.addEventListener('click', () => {
+          navigator.clipboard?.writeText(r.error || '').catch(() => {});
+        });
+        item.style.flexDirection = 'column';
+        item.style.alignItems = 'stretch';
+        item.appendChild(errLine);
+      }
+
       bResultList.appendChild(item);
     }
     bResultList.style.display = results.length > 0 ? '' : 'none';

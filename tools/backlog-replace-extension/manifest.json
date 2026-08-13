@@ -3,7 +3,7 @@
   "name": "Backlog Document Find & Replace",
   "version": "0.2.0",
   "description": "Backlogドキュメントのテキスト一括置換Chrome拡張",
-  "permissions": ["activeTab", "tabs", "storage"],
+  "permissions": ["activeTab", "tabs", "storage", "scripting"],
   "host_permissions": [
     "https://*.backlog.com/*",
     "https://*.backlog.jp/*"
